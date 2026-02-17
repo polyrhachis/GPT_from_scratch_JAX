@@ -1,2 +1,2 @@
 # GPT_from_scratch_JAX
-from scratch implementation of a GPT transformer using JAX and Equinox.
+A from scratch implementation of a GPT-style transformer (decoder only). The code works, but I'm still having issues with training (the model doesn't converge).
