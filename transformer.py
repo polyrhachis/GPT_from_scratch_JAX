@@ -3,7 +3,6 @@ from jax import numpy as jnp, random as jr
 import equinox as eqx
 
 
-
 class Linear(eqx.Module):
 
     w : jnp.ndarray
@@ -60,6 +59,53 @@ class SelfAttention(eqx.Module):
     
     def get_QKV(self, x):
         return x@self.Qw, x@self.Kw, x@self.Vw
+
+
+class MultiHeadAttention(eqx.Module):
+    Qw : jnp.ndarray
+    Kw : jnp.ndarray
+    Vw : jnp.ndarray
+    Wo : jnp.ndarray  
+    heads : int = eqx.field(static=True)
+
+    def __init__(self, key : int, heads, dim):  
+
+        key = jr.PRNGKey(key)
+        self.heads = heads
+        key, key2, key3, key4 = jr.split(key, 4)
+        self.Qw = jr.normal(key, (dim, dim))/40
+        self.Kw = jr.normal(key2, (dim, dim))/40
+        self.Vw = jr.normal(key3, (dim, dim))/40
+        self.Wo = jr.normal(key4, (dim, dim))/40
+
+    def __call__(self, x):
+        Q, K, V = self.get_QKV(x)
+        Q, K, V = self.split_and_reshape(Q, K, V, x)
+        logits = Q@jnp.swapaxes(K, axis1=-1, axis2=-2)/jnp.sqrt(x.shape[-1]/self.heads)
+
+
+        seq_len = x.shape[1]
+        mask = jnp.tril(jnp.ones((seq_len, seq_len)))
+        mask = jnp.where(mask == 0, -jnp.inf, 0.0)
+        logits = logits + mask
+        scores = jax.nn.softmax(logits, axis=-1)@V
+        scores = scores.swapaxes(axis1=-2, axis2=-3)
+        scores = scores.reshape(-1, x.shape[1], x.shape[-1])
+        
+
+
+
+        return scores@ self.Wo
+    
+    def get_QKV(self, x):
+        return x@self.Qw, x@self.Kw, x@self.Vw
+    
+    def split_and_reshape(self, Q, K, V, x):
+        Q = jnp.swapaxes(Q.reshape(x.shape[0], x.shape[1], self.heads, -1), axis1=-2, axis2=-3)
+        K = jnp.swapaxes(K.reshape(x.shape[0], x.shape[1], self.heads, -1), axis1=-2, axis2=-3)
+        V = jnp.swapaxes(V.reshape(x.shape[0], x.shape[1], self.heads, -1), axis1=-2, axis2=-3)
+        return Q, K, V
+
 
 
 class Sequential(eqx.Module):
@@ -145,7 +191,7 @@ decode = lambda num: ''.join([itos[i] for i in num])
 
 x = jnp.array(encode(text))
 dataset_len = len(x)
-block_size = 8
+block_size = 32
 batch_size = 1280
 
 class DataLoader:
@@ -207,13 +253,13 @@ def loss(preds, y):
 model = GPT(
     key=0,
     sequential=Sequential(
-        TransformerBlock(SelfAttention(0, 128), FFN(0, 128, 512), LayerNorm(128), LayerNorm(128)),
-        TransformerBlock(SelfAttention(1, 128), FFN(1, 128, 512), LayerNorm(128), LayerNorm(128)),
-        TransformerBlock(SelfAttention(2, 128), FFN(2, 128, 512), LayerNorm(128), LayerNorm(128)),
-        TransformerBlock(SelfAttention(3, 128), FFN(3, 128, 512), LayerNorm(128), LayerNorm(128)),
-        TransformerBlock(SelfAttention(4, 128), FFN(4, 128, 512), LayerNorm(128), LayerNorm(128)),
-        TransformerBlock(SelfAttention(5, 128), FFN(5, 128, 512), LayerNorm(128), LayerNorm(128)),
-        TransformerBlock(SelfAttention(6, 128), FFN(6, 128, 512), LayerNorm(128), LayerNorm(128)),
+        TransformerBlock(MultiHeadAttention(0, 8, 128), FFN(0, 128, 512), LayerNorm(128), LayerNorm(128)),
+        TransformerBlock(MultiHeadAttention(1, 8, 128), FFN(1, 128, 512), LayerNorm(128), LayerNorm(128)),
+        TransformerBlock(MultiHeadAttention(2, 8, 128), FFN(2, 128, 512), LayerNorm(128), LayerNorm(128)),
+        TransformerBlock(MultiHeadAttention(3, 8, 128), FFN(3, 128, 512), LayerNorm(128), LayerNorm(128)),
+        TransformerBlock(MultiHeadAttention(4, 8, 128), FFN(4, 128, 512), LayerNorm(128), LayerNorm(128)),
+        TransformerBlock(MultiHeadAttention(5, 8, 128), FFN(5, 128, 512), LayerNorm(128), LayerNorm(128)),
+        TransformerBlock(MultiHeadAttention(6, 8, 128), FFN(6, 128, 512), LayerNorm(128), LayerNorm(128)),
         Linear(0, 128, 65)
     ), w_emb=Embedding(0, vocab_size=65, dim=128), pos_emb=Embedding(1, vocab_size=block_size, dim=128)
 )
@@ -247,7 +293,26 @@ def train_loop(steps, model, loss):
         if step % 10 == 0:
             print(loss)
     
+    return model
+    
 
-train_loop(10000, model, loss)
+model = train_loop(1000, model, loss)
+
+
+def generate(model, start_string, max_new_tokens):
+
+
+    string = jnp.array(encode(start_string)).reshape(1, -1)
+    for i in range(max_new_tokens):
+
+        token = model(string)
+        string = jnp.concatenate((string, jnp.argmax(token[:, -1, :], axis=-1).reshape(1, -1)), axis=-1)
+        print(decode([string[0][-1].tolist()]), end="")
+
+
+
+
+
+generate(model, "the:", 50)
 
 
